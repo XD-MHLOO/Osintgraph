@@ -1195,5 +1195,5 @@ Write the actual task description, with `{placeholder_name}` tags for runtime da
 ## 📦 Dependencies:
 - **[Instaloader](https://github.com/instaloader/instaloader)** – Used to collect Instagram profile data, followers, and followees.
 - **[Neo4j](https://neo4j.com/)** – Graph database used to store and visualize the Instagram social network.
-- **[LangGraph](https://github.com/langgraph/langgraph)** – Handles structured multi-step LLM reasoning and ReAct-style agent execution.
+- **[LangGraph](https://github.com/langchain-ai/langgraph)** – Handles structured multi-step LLM reasoning and ReAct-style agent execution.
 - **[Gemini / Google Generative AI](https://developers.google.com/)** – Provides the LLM model used for AI-powered analysis and powers the AI agent.
