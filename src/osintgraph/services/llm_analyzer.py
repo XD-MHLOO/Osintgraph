@@ -7,14 +7,71 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from ..utils.data_extractors import extract_json_block
 from ..utils.prompts import image_analysis, post_analysis, account_analysis
 from ..utils.fetch_urls import fetch_post_urls
-from ..services.llm_models import gemini_2_0_flash_with_limit, gemini_2_5_flash_llm_with_limit
+from ..services import llm_models
+from ..services.orcarouter import OrcaRouterError, PROVIDER_ID
+
+
+def _auth_hint(exc):
+    """Return a clear, credential-free hint for a rejected OrcaRouter key."""
+    status = getattr(exc, "status_code", None)
+    if status in (401, 403):
+        return (
+            "OrcaRouter rejected the API key. Run `osintgraph setup orcarouter` "
+            "to update it (existing credentials are kept until you replace them)."
+        )
+    return None
 
 
 class LLMAnalyzer:
 
-    def __init__(self, default_model=gemini_2_0_flash_with_limit, fallback_model=gemini_2_5_flash_llm_with_limit):
+    def __init__(self, default_model=None, fallback_model=None):
+        provider = llm_models.get_llm_provider()
+        if default_model is None:
+            default_model = llm_models.get_chat_model("analyzer")
+        if fallback_model is None:
+            if provider == PROVIDER_ID:
+                fallback_model = llm_models.get_orcarouter_fallback_model()
+            else:
+                fallback_model = llm_models.gemini_2_5_flash_llm_with_limit
         self.default_model = default_model
         self.fallback_model = fallback_model
+
+    def _current_model(self, decode_failures, model_switch_threshold):
+        current_model = (
+            self.fallback_model if decode_failures >= model_switch_threshold and self.fallback_model
+            else self.default_model
+        )
+        if current_model is None:
+            if llm_models.get_llm_provider() == PROVIDER_ID:
+                raise OrcaRouterError(
+                    "No LLM is configured for OrcaRouter Cyber Inference. "
+                    "Run `osintgraph setup orcarouter` to add an API key.",
+                    kind="auth",
+                )
+            raise RuntimeError(
+                "No LLM is configured. Run `osintgraph setup gemini` to add an API key."
+            )
+        return current_model
+
+    def _require_multimodal(self, model):
+        """Fail closed when the selected OrcaRouter model declares no image input.
+
+        The selector already filters this, but a stored value can predate the
+        current catalog (for example after a tier change), so the request is
+        also checked before an image is sent.
+        """
+        if llm_models.get_llm_provider() != PROVIDER_ID:
+            return
+        model_id = getattr(model, "model_name", None) or getattr(model, "model", None)
+        result = llm_models.load_multimodal_catalog()
+        if model_id not in {m.id for m in result.models}:
+            raise RuntimeError(
+                "OrcaRouter model '{}' does not declare image input (catalog source: {}). "
+                "Pick an image-capable model with "
+                "`osintgraph models --capability multimodal --set MODEL_ID`.".format(
+                    model_id, result.source
+                )
+            )
 
     def analyze_image(self, url: str, system_prompt: str,  json_output: bool, max_retries=13, model_switch_threshold=1) -> dict:
         decode_failures = 0
@@ -22,10 +79,8 @@ class LLMAnalyzer:
         for attempt in range(max_retries):
             try:
                 # print(f"[Process] Processing URL: {url}")
-                current_model = (
-                    self.fallback_model if decode_failures >= model_switch_threshold and self.fallback_model
-                    else self.default_model
-                )
+                current_model = self._current_model(decode_failures, model_switch_threshold)
+                self._require_multimodal(current_model)
                 messages = [
                     SystemMessage(content=system_prompt),
                     HumanMessage(content=[{
@@ -48,6 +103,9 @@ class LLMAnalyzer:
                     raise e
                 time.sleep(10)
             except Exception as e:
+                hint = _auth_hint(e)
+                if hint:
+                    raise RuntimeError(hint) from None
                 raise e
         raise RuntimeError("Image analysis failed after retries")
 
@@ -57,10 +115,7 @@ class LLMAnalyzer:
 
         for attempt in range(max_retries):
             try:
-                current_model = (
-                    self.fallback_model if decode_failures >= model_switch_threshold and self.fallback_model
-                    else self.default_model
-                )
+                current_model = self._current_model(decode_failures, model_switch_threshold)
 
                 messages = [
                     SystemMessage(content=system_prompt),
@@ -82,6 +137,9 @@ class LLMAnalyzer:
                     raise e
                 time.sleep(10)
             except Exception as e:
+                hint = _auth_hint(e)
+                if hint:
+                    raise RuntimeError(hint) from None
                 raise e
         raise RuntimeError("Text analysis failed after retries")
             

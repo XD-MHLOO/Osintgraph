@@ -2,7 +2,7 @@ import json
 from langchain.tools import StructuredTool
 from langchain_core.tools import Tool
 from ...utils.schemas import SemanticCypherInput
-from ...services.llm_models import text_embedding_004_llm
+from ...services import llm_models
 
 def build_cypher_query_tool(nm):
     def cypher_query_tool(query: str):
@@ -95,7 +95,10 @@ ORDER BY comment.created_at_utc DESC
 
 def build_semantic_cypher_tool(nm):
     def semantic_cypher_tool(query_text: str, cypher_template: str):
-        vector = text_embedding_004_llm.embed_query(query_text)
+        embeddings = llm_models.get_embeddings_model()
+        if embeddings is None:
+            return "Error: no embeddings provider is configured; semantic search is unavailable."
+        vector = embeddings.embed_query(query_text)
 
         try:
             result = nm.execute_read(nm.run_cypher_query, cypher_template, vector)

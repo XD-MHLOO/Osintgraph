@@ -15,6 +15,7 @@ SERVICE_MAP = {
     "instagram": ["INSTAGRAM_USERNAME"],
     "neo4j": ["NEO4J_URI", "NEO4J_USERNAME", "NEO4J_PASSWORD"],
     "gemini": ["GEMINI_API_KEY"],
+    "orcarouter": ["ORCAROUTER_API_KEY"],
     "user-agent": ["INSTAGRAM_USER_AGENT"],
     "all": ["NEO4J_URI", "NEO4J_USERNAME", "NEO4J_PASSWORD",
             "INSTAGRAM_USERNAME", "INSTAGRAM_USER_AGENT", "GEMINI_API_KEY"]
@@ -37,6 +38,13 @@ DEBUG_LOGS_DIR = os.path.join(
 )
 
 os.makedirs(DEBUG_LOGS_DIR, exist_ok=True)
+
+# Last-known-good OrcaRouter model catalog, so a fresh session still has a
+# capability-filtered model list when the catalog endpoint is unreachable.
+MODEL_CATALOG_CACHE_FILE = os.environ.get("OSINTGRAPH_MODEL_CATALOG_CACHE") or os.path.join(
+    user_config_dir(appname="osintgraph", appauthor=False, ensure_exists=True),
+    "orcarouter_models.json"
+)
 
 TRACK_FILE = os.path.join(BASE_DIR, "templates_sync.json")
 

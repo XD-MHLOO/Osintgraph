@@ -16,6 +16,7 @@ from .neo4j_manager import Neo4jManager
 from .credential_manager import get_credential_manager
 from .osintgraph_agent import OSINTGraphAgent
 from .constants import SERVICE_MAP, GIT_REPO, TEMPLATES_DIR
+from .services import llm_models, model_picker, orcarouter
 
 
 
@@ -62,7 +63,7 @@ def main():
 
         {HEADER_COLOR}setup{RESET} [target]
             Setup services and credentials.
-            Targets: all (default), instagram, neo4j, gemini, user-agent
+            Targets: all (default), instagram, neo4j, gemini, orcarouter, user-agent
 
             Examples:
                 {HEADER_COLOR}osintgraph setup{RESET}
@@ -70,7 +71,7 @@ def main():
 
         {HEADER_COLOR}reset{RESET} [target]
             Reset stored credentials for a service, then immediately re-run setup.
-            Targets: all (default), instagram, neo4j, gemini, user-agent
+            Targets: all (default), instagram, neo4j, gemini, orcarouter, user-agent
 
             Examples:
                 {HEADER_COLOR}osintgraph reset{RESET}
@@ -121,6 +122,11 @@ def main():
             Example:
                 {HEADER_COLOR}osintgraph explore "target_user" --max 10 --limit follower=1000 followee=500 --rate-limit 1000{RESET}
 
+        {HEADER_COLOR}models{RESET} [--capability chat|multimodal|embedding] [--refresh] [--set MODEL_ID]
+            List the OrcaRouter Cyber Inference model catalog for this account and
+            optionally save the model used by the AI analysis and agent.
+            Options come from {HEADER_COLOR}https://api.orcarouter.ai/v1/models{RESET}, never free text.
+
         {HEADER_COLOR}agent{RESET}
             Launch the OSINTGraph AI Agent for searching (keyword search, semantic search), analyzing, and template-based investigations.
             
@@ -145,12 +151,12 @@ def main():
 
     setup_parser = subparsers.add_parser("setup", help="Setup services.")
     setup_parser.add_argument("target", nargs="?", default="all",
-                            choices=["all", "instagram", "neo4j", "gemini", "user-agent"],
+                            choices=["all", "instagram", "neo4j", "gemini", "orcarouter", "user-agent"],
                             help="Setup services (default=all).")
     
     reset_parser = subparsers.add_parser("reset", help="Reset credentials.")
     reset_parser.add_argument("target", nargs="?", default="all",
-                            choices=["all", "instagram", "neo4j", "gemini", "user-agent"],
+                            choices=["all", "instagram", "neo4j", "gemini", "orcarouter", "user-agent"],
                             help="Service to reset (default: all).")
     # Discover command
     discover_parser = subparsers.add_parser("discover", help="Full scrape of a target username: followers, followees, posts, and AI analysis (if Gemini API set).")
@@ -174,6 +180,13 @@ def main():
     # agent_parser.add_argument("--rate-limit", action="store_true", default=False, help="Enable rate limiter for the AI Agent to reduce hitting API rate limits.")
     agent_parser.add_argument("--debug", action="store_true", help="Enable debug output for template")
 
+    # Models command (OrcaRouter Cyber Inference)
+    models_parser = subparsers.add_parser("models", help="List or choose an OrcaRouter Cyber Inference model from the live catalog.")
+    models_parser.add_argument("--capability", choices=["chat", "multimodal", "embedding"], default="chat",
+                               help="Which capability to list (default: chat).")
+    models_parser.add_argument("--refresh", action="store_true", help="Ignore the cache and re-fetch the catalog.")
+    models_parser.add_argument("--set", metavar="MODEL_ID", help="Save a model id that is present in the catalog.")
+
 
     
     if len(sys.argv) == 1:
@@ -193,6 +206,52 @@ def main():
         
     credential_manager = get_credential_manager()
 
+
+    def setup_orcarouter():
+        """Configure the named OrcaRouter Cyber Inference provider (API key)."""
+        existing = credential_manager.get("ORCAROUTER_API_KEY")
+        if existing:
+            logger.info(f"✓  OrcaRouter Cyber Inference key configured: ({orcarouter.mask_key(existing)})")
+            logger.info("Enter a new API key to replace it, or press Enter to keep the current one:")
+        else:
+            logger.warning("⚠  No OrcaRouter Cyber Inference API key found.")
+            logger.info(f"Create one at {orcarouter.KEY_DASHBOARD_URL}")
+            logger.info(f"Provider overview: {orcarouter.PROVIDER_PAGE_URL}")
+            logger.info(f"Cyber model catalog: {orcarouter.MODEL_CATALOG_URL}")
+        entered = input("                       > ").strip()
+        if entered:
+            hint = orcarouter.key_format_hint(entered)
+            if hint:
+                logger.warning("⚠  " + hint)
+            credential_manager.set("ORCAROUTER_API_KEY", entered)
+        elif not existing:
+            logger.warning("⚠  No OrcaRouter API key set. OrcaRouter Cyber Inference stays disabled.")
+            return
+
+        credential_manager.set("LLM_PROVIDER", "orcarouter")
+
+        result = llm_models.get_model_catalog().load(
+            "chat", api_key=llm_models.get_orcarouter_api_key(), refresh=True
+        )
+        if result.source == "live":
+            logger.info(f"✓  OrcaRouter catalog reachable: {len(result.models)} chat models available.")
+        else:
+            logger.warning(f"⚠  Live catalog unavailable; using {result.source}.")
+            if result.error:
+                logger.warning("   " + result.error)
+
+        current = credential_manager.get("ORCAROUTER_MODEL")
+        selected = model_picker.choose_model(
+            result.models,
+            capability="chat",
+            catalog_source=result.source,
+            degraded=result.degraded,
+            selected=current,
+            default=orcarouter.DEFAULT_MODEL,
+        )
+        if selected:
+            credential_manager.set("ORCAROUTER_MODEL", selected)
+            logger.info(f"✓  OrcaRouter model set: {selected}")
 
     def run_setup(reset_target):
         try:
@@ -229,6 +288,9 @@ def main():
                         logger.info("✓  Gemini API key set.")
                     else:
                         logger.warning("⚠  No Gemini API key set. AI pre-analysis and the OSINTGraph agent will be unavailable.")
+
+            if setup_target == "orcarouter":
+                setup_orcarouter()
 
             if setup_target in ["all", "user-agent"]:
                         # --- Instagram User-Agent ---
@@ -335,12 +397,71 @@ def main():
 
         
 
-    elif args.command == "agent":
-        llm_api_key = credential_manager.get("GEMINI_API_KEY")
-        if not llm_api_key:
-            logger.error("✗ No Gemini API key set. Please run `osintgraph setup gemini` to configure it.")
+    elif args.command == "models":
+        if not llm_models.get_orcarouter_api_key():
+            logger.error("✗ No OrcaRouter API key set. Please run `osintgraph setup orcarouter` to configure it.")
             sys.exit(1)
-        
+
+        capability = args.capability
+        result = llm_models.get_model_catalog().load(
+            capability, api_key=llm_models.get_orcarouter_api_key(), refresh=args.refresh
+        )
+        print(model_picker.render(
+            result.models,
+            capability,
+            result.source,
+            degraded=result.degraded,
+            selected=credential_manager.get("ORCAROUTER_MODEL"),
+        ))
+        if result.error:
+            logger.warning(result.error)
+
+        if args.set:
+            if orcarouter.get_model(result.models, args.set) is None:
+                logger.error(
+                    f"✗ '{args.set}' is not a compatible {capability} model in the current catalog. Nothing changed."
+                )
+                sys.exit(1)
+            credential_manager.set("ORCAROUTER_MODEL", args.set)
+            logger.info(f"✓  OrcaRouter model set: {args.set}")
+        elif sys.stdin.isatty():
+            selected = model_picker.choose_model(
+                result.models,
+                capability=capability,
+                catalog_source=result.source,
+                degraded=result.degraded,
+                selected=credential_manager.get("ORCAROUTER_MODEL"),
+                default=orcarouter.DEFAULT_MODEL if capability == orcarouter.CHAT else None,
+            )
+            if selected:
+                credential_manager.set("ORCAROUTER_MODEL", selected)
+                logger.info(f"✓  OrcaRouter model set: {selected}")
+
+    elif args.command == "agent":
+        provider = llm_models.get_llm_provider()
+        if provider == orcarouter.PROVIDER_ID:
+            if not llm_models.get_orcarouter_api_key():
+                logger.error("✗ No OrcaRouter API key set. Please run `osintgraph setup orcarouter` to configure it.")
+                sys.exit(1)
+            catalog = llm_models.get_model_catalog().load(
+                "chat", api_key=llm_models.get_orcarouter_api_key()
+            )
+            stored_model = credential_manager.get("ORCAROUTER_MODEL")
+            model_id, was_reset = orcarouter.resolve_selected_model(stored_model, catalog.models)
+            if was_reset and model_id:
+                credential_manager.set("ORCAROUTER_MODEL", model_id)
+                logger.warning(
+                    f"⚠  Saved OrcaRouter model '{stored_model}' is not in the current catalog; "
+                    f"switched to {model_id}. Use `osintgraph models` to pick another."
+                )
+            elif not model_id:
+                logger.warning("⚠  No compatible OrcaRouter chat model is available right now.")
+        else:
+            llm_api_key = credential_manager.get("GEMINI_API_KEY")
+            if not llm_api_key:
+                logger.error("✗ No Gemini API key set. Please run `osintgraph setup gemini` to configure it.")
+                sys.exit(1)
+
         setup_root_logger(args.debug)
 
         agent = OSINTGraphAgent(debug=args.debug)

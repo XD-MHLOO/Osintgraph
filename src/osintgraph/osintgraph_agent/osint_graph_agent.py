@@ -25,11 +25,7 @@ from langmem.short_term import SummarizationNode, RunningSummary
 import langmem.short_term.summarization as summarization_mod
 
 from ..credential_manager import get_credential_manager
-from ..services.llm_models import (
-    gemini_2_0_flash, 
-    gemini_2_0_flash_with_limit,
-    text_embedding_004_llm
-)
+from ..services import llm_models
 from ..neo4j_manager import Neo4jManager
 
 from .osint_prompts import (
@@ -79,7 +75,18 @@ class State(TypedDict):
 class OSINTGraphAgent:
     def __init__(self, debug=False):
         self.debug = debug
-        self.llm = gemini_2_0_flash
+        self.provider = llm_models.get_llm_provider()
+        self.provider_label = (
+            "OrcaRouter" if self.provider == llm_models.orcarouter.PROVIDER_ID else "Gemini"
+        )
+        self.chat_model = llm_models.get_chat_model("agent")
+        if self.chat_model is None:
+            raise llm_models.orcarouter.OrcaRouterError(
+                "No LLM is configured. Run `osintgraph setup orcarouter` for "
+                "OrcaRouter Cyber Inference or `osintgraph setup gemini`.",
+                kind="auth",
+            )
+        self.llm = self.chat_model
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(logging.DEBUG if debug else logging.INFO)
         self.nm = Neo4jManager()
@@ -227,10 +234,16 @@ class OSINTGraphAgent:
                         texts.append(str(content))
                         refs.append({"id": node["id"], "property": f"{field}_vector"})
 
+                embeddings = llm_models.get_embeddings_model()
+                if embeddings is None:
+                    self.logger.warning(
+                        "⚠  No embeddings provider configured; skipping graph vector indexing."
+                    )
+                    break
                 for text_batch, ref_batch in zip(batched(texts, 200), batched(refs, 200)):
                     try:
                         # print(f"✨ Embedding batch of size {len(text_batch)} for {label}.{field}")
-                        vectors = text_embedding_004_llm.embed_documents(text_batch)
+                        vectors = embeddings.embed_documents(text_batch)
                         batch_data = [
                             {**ref, "vector": vector}
                             for ref, vector in zip(ref_batch, vectors)
@@ -253,8 +266,13 @@ class OSINTGraphAgent:
 
         ]
 
-        self.llm_with_tools = gemini_2_0_flash.bind_tools(self.tools)
-        self.llm_with_tools_with_limit = gemini_2_0_flash_with_limit.bind_tools(self.tools)
+        self.llm_with_tools = self.chat_model.bind_tools(self.tools)
+        # OrcaRouter is a metered gateway rather than a free tier, so the
+        # Gemini-specific two-speed model switch has nothing to throttle.
+        if self.provider == llm_models.orcarouter.PROVIDER_ID:
+            self.llm_with_tools_with_limit = self.llm_with_tools
+        else:
+            self.llm_with_tools_with_limit = llm_models.get_chat_model("agent_limited").bind_tools(self.tools)
         self.llm = self.llm_with_tools
         self.logger.info("Agent is in beta — responses may be inconsistent. Ask for clarification if needed.")
         self.logger.info("Type 'exit' to end the session.")
@@ -266,7 +284,7 @@ class OSINTGraphAgent:
     
         message_summarization_node = SummarizationNode(
             token_counter=count_tokens_approximately,
-            model=gemini_2_0_flash_with_limit,
+            model=self.chat_model,
             max_tokens=100000,
             max_tokens_before_summary=200000,
             max_summary_tokens=3000,
@@ -278,7 +296,7 @@ class OSINTGraphAgent:
 
         scratchpad_summarization_node = SummarizationNode(
             token_counter=count_tokens_approximately,
-            model=gemini_2_0_flash_with_limit,
+            model=self.chat_model,
             max_tokens=100000,
             max_tokens_before_summary=150000,
             max_summary_tokens=3000,
@@ -414,7 +432,7 @@ class OSINTGraphAgent:
 
     async def stream_graph_updates(self, user_input: str):
         state = {"question": [HumanMessage(content=user_input)], "scratchpad": [AIMessage(content="Thought:")]}
-        live_console.print("\n✨ [light_salmon1]Gemini:[/light_salmon1] ")
+        live_console.print(f"\n✨ [light_salmon1]{self.provider_label}:[/light_salmon1] ")
 
         ui.status_text.clear()
         ui.output_text .clear()
@@ -471,7 +489,7 @@ class OSINTGraphAgent:
                 ui.refresh()
                 
     async def run(self):
-        live_console.print("\n✨ [light_salmon1]Gemini:[/light_salmon1] ")
+        live_console.print(f"\n✨ [light_salmon1]{self.provider_label}:[/light_salmon1] ")
         live_console.print("Hi, I’m your OSINTGraph investigator. I’ll analyze the Neo4j graph for your OSINT queries. What’s on your mind today?")
             
         while True:

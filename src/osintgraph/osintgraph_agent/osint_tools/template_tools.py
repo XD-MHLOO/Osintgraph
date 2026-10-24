@@ -14,15 +14,26 @@ from langchain.tools import StructuredTool
 from langchain_core.tools import Tool
 
 from ...services.llm_analyzer import LLMAnalyzer
+from ...services import llm_models
 from ...utils.schemas import GetTemplateDetailsInput
 from ...constants import TEMPLATES_DIR, DEBUG_LOGS_DIR
 from ...ui import ui
-from ...services.llm_models import gemini_2_5_flash_llm_with_limit
 
 logger = logging.getLogger(__name__)
 
 console = Console()
-template_llm = LLMAnalyzer(default_model=gemini_2_5_flash_llm_with_limit)
+
+
+def _template_model():
+    """Template analysis uses the active provider's chat model."""
+    if llm_models.get_llm_provider() == llm_models.orcarouter.PROVIDER_ID:
+        return llm_models.get_chat_model("template")
+    return llm_models.gemini_2_5_flash_llm_with_limit
+
+
+def get_template_llm():
+    """Built lazily so importing the CLI never constructs a network client."""
+    return LLMAnalyzer(default_model=_template_model())
 
 
 
@@ -189,7 +200,7 @@ def run_template(template_name: str, args: dict) -> str:
     full_prompt = f"[SYSTEM]\n{template['system_prompt'].strip()}\n\n[USER]\n{rendered_user_prompt.strip()}"
     ui.status_text.set(f"[grey70]Executing Template {template_name}...[/grey70]")
     time.sleep(70)
-    result = template_llm.analyze_text(user_prompt=rendered_user_prompt, system_prompt=template['system_prompt'], json_output=False)
+    result = get_template_llm().analyze_text(user_prompt=rendered_user_prompt, system_prompt=template['system_prompt'], json_output=False)
     ui.status_text.set(f"[grey70]Results from {template_name}:[/grey70]")
 
     detect_and_print(result)

@@ -21,6 +21,7 @@ dependencies = [
     "langchain==0.3.27",
     "langchain-core==0.3.72",
     "langchain-google-genai==2.1.8",
+    "langchain-openai==0.3.28",
     "langgraph==0.6.2",
     "langmem==0.0.29",
     "neo4j==5.28.1",
@@ -46,6 +47,14 @@ packages = ["src/osintgraph"]
 
 [project.scripts]
 osintgraph = "osintgraph.cli:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [project.urls]
 Homepage = "https://github.com/XD-MHLOO/Osintgraph"

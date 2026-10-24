@@ -229,6 +229,8 @@ Configures services and credentials so OSINTGraph can access Instagram, Neo4j, G
 
 - `gemini` — set your Gemini API key for AI analysis.
 
+- `orcarouter` — set an OrcaRouter Cyber Inference API key and pick the model used for AI analysis and the agent.
+
 - `user-agent` — customize the User-Agent string for scraping.
 
 **When to use:**
@@ -421,6 +423,54 @@ osintgraph agent --debug
 
 </details>
 
+
+## 🛡 OrcaRouter Cyber Inference provider
+
+**[OrcaRouter](https://www.orcarouter.ai)** is an OpenAI-compatible AI gateway that routes many providers behind one endpoint. Its Cyber Inference tier is built for security teams doing authorised, scoped OSINT and security work: it admits those workloads that general-purpose gateways frequently refuse or silently downgrade, and the same endpoint also enforces gateway-level guardrails for defensive teams.
+
+- Provider page: <https://www.orcarouter.ai/cyber>
+- Cyber model catalog: <https://www.orcarouter.ai/models?tier=cyber>
+
+Osintgraph registers it as a first-class named provider (`orcarouter`) next to Gemini. It powers the AI post analysis, the account analysis, template-driven analysis, and the AI agent. It is never configured as an "any endpoint" passthrough: the provider, its credential, and its model list are their own entries.
+
+### Authentication (API key)
+
+Osintgraph has no account-login flow of its own, so OrcaRouter uses the project's existing credential store:
+
+```bash
+osintgraph setup orcarouter
+```
+
+Paste an OrcaRouter API key (`sk-orca-…`, create one at <https://www.orcarouter.ai/console>). The key is written to the same `credentials.json` the other services use, shown only as `...abcd` in status output, and is never logged. `osintgraph reset orcarouter` clears it. A rejected key produces a terminal message pointing at `osintgraph setup orcarouter`; there is no retry loop.
+
+### Model selection
+
+When the provider is selected, the model list is fetched live from `GET https://api.orcarouter.ai/v1/models` with your key and filtered by capability. There is no free-text model field.
+
+- **Default:** `orcarouter/auto` — automatic routing, works with any key.
+- **Recommended for security teams** (business-verified accounts): `orca/orcacyber-ultra-1.0` for security code scanning and multi-step reasoning over large codebases, and `orca/orcacyber-zero-1.5` for OrcaCyber-harness-driven work.
+- **General fallback:** `orcarouter/fusion`.
+
+```bash
+osintgraph models                       # list chat models from the live catalog
+osintgraph models --capability multimodal
+osintgraph models --refresh --set orcarouter/auto
+```
+
+If the catalog is unreachable, a small verified fallback list is shown and labelled `verified_fallback` (or the last successful catalog is reused and labelled `last_known_good`); an unverified model name is never offered. Incompatible attachments are filtered rather than accepted: `multimodal` only lists chat models that explicitly declare image input, and the image-analysis step fails closed instead of sending an image to a text-only model.
+
+### Configuration
+
+| Variable | Meaning |
+| --- | --- |
+| `ORCAROUTER_API_KEY` | API key fallback for CI; the credential store takes precedence. |
+| `ORCAROUTER_MODEL` | Selected model id (default `orcarouter/auto`). |
+| `ORCAROUTER_EMBEDDING_MODEL` | Optional embedding model id for semantic search. |
+| `LLM_PROVIDER` | `orcarouter` or `gemini`. |
+| `ORCAROUTER_API_BASE_URL` | Inference base override (default `https://api.orcarouter.ai/v1`). |
+| `ORCA_API_BASE_URL` / `ORCA_BASE_URL` | Standard/shared self-hosted base overrides. |
+
+HTTPS is required for non-loopback origins. Embedding-backed semantic search stays on Gemini when the OrcaRouter catalog advertises no embedding model for the account, because the Neo4j vector indexes in this project are built at 768 dimensions.
 
 ## 🧩 Data Model (Neo4j Schema)
 After scraping, OSINTGraph stores Instagram data in Neo4j as interconnected nodes and relationships.
@@ -1197,3 +1247,4 @@ Write the actual task description, with `{placeholder_name}` tags for runtime da
 - **[Neo4j](https://neo4j.com/)** – Graph database used to store and visualize the Instagram social network.
 - **[LangGraph](https://github.com/langchain-ai/langgraph)** – Handles structured multi-step LLM reasoning and ReAct-style agent execution.
 - **[Gemini / Google Generative AI](https://developers.google.com/)** – Provides the LLM model used for AI-powered analysis and powers the AI agent.
+- **[OrcaRouter](https://www.orcarouter.ai)** – Optional named AI provider (Cyber Inference tier) for the same analysis and agent workflows through one OpenAI-compatible endpoint.

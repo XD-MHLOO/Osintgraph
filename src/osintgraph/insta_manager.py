@@ -14,6 +14,7 @@ from google.api_core.exceptions import ResourceExhausted, TooManyRequests
 from .credential_manager import get_credential_manager
 from .get_session import *
 from .services.llm_analyzer import LLMAnalyzer
+from .services import llm_models
 from .neo4j_manager import *
 from .utils.data_extractors import (
     extract_comment_data,
@@ -57,7 +58,9 @@ class InstagramManager:
         self.llmanalyzer = LLMAnalyzer()
         self.username = ""
         self.key_lock = asyncio.Lock()
-        self.has_gemini_key = bool(self.credential_manager.get("GEMINI_API_KEY"))
+        # LLM pre-analysis runs on whichever named provider is configured:
+        # Gemini, or OrcaRouter Cyber Inference (API key).
+        self.has_llm = llm_models.has_llm_credentials()
         if self.config.auto_login:
             _ = self.neo4j_manager
             self._login()
@@ -134,16 +137,16 @@ class InstagramManager:
                 if force_this or not completions.get(data_type, False):
 
                     if data_type == "posts_analysis":
-                        if self.has_gemini_key:
+                        if self.has_llm:
                             self.analyze_post(user["username"])
                         else:
-                            self.logger.warning("⤷  Skipped posts_analysis (no Gemini key)")
+                            self.logger.warning("⤷  Skipped posts_analysis (no LLM provider configured)")
 
                     elif data_type == "account_analysis":
-                        if self.has_gemini_key:
+                        if self.has_llm:
                             self.analyze_account(user["username"])
                         else:
-                            self.logger.warning("⤷  Skipped account_analysis (no Gemini key)")
+                            self.logger.warning("⤷  Skipped account_analysis (no LLM provider configured)")
                     else:
                         self._fetch_and_map(profile, data_type)
 
@@ -482,7 +485,10 @@ class InstagramManager:
             return False
         except Exception as e:
             if "API_KEY_INVALID" in str(e):
-                    self.logger.error(f"⚠  Gemini API key is invalid. Please run `osintgraph reset gemini` to update it.")
+                    if llm_models.get_llm_provider() == llm_models.orcarouter.PROVIDER_ID:
+                        self.logger.error(f"⚠  OrcaRouter API key is invalid. Please run `osintgraph setup orcarouter` to update it.")
+                    else:
+                        self.logger.error(f"⚠  Gemini API key is invalid. Please run `osintgraph reset gemini` to update it.")
                     return False
             self.logger.error(f"⚠  Post analysis Failed. Unknown error  {e}")
             return False
